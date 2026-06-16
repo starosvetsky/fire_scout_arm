@@ -35,10 +35,16 @@ jobs:
           mv hotspot.dart lib/models/ || true
           mv database_helper.dart lib/services/ || true
           
-          # 2. Робот генерирует недостающие системные файлы Android
-          flutter create --platforms=android .
+          # 2. Удаляем сломанный/пустой pubspec.yaml
+          rm -f pubspec.yaml
           
-          # 3. Робот добавляет права на GPS и Интернет для карты
+          # 3. Создаем идеальный проект заново (сгенерирует правильный pubspec.yaml и файлы Android)
+          flutter create --platforms=android --project-name fire_scout_arm .
+          
+          # 4. Безопасно добавляем нужные библиотеки штатными средствами Flutter
+          flutter pub add flutter_map latlong2 geolocator sqflite path
+          
+          # 5. Робот добавляет права на GPS и Интернет для карты
           python3 -c '
           path = "android/app/src/main/AndroidManifest.xml"
           with open(path, "r") as f: content = f.read()
