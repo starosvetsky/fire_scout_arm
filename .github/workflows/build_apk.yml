@@ -28,8 +28,11 @@ jobs:
 
       - name: Prepare Project Structure & Android Files
         run: |
+          # 0. Безжалостно удаляем старый пустой файл, скачанный с GitHub
+          rm -f pubspec.yaml
+
           # 1. Создаем чистый проект Flutter (сгенерирует правильный pubspec.yaml)
-          flutter create --platforms=android .
+          flutter create --platforms=android --project-name fire_scout_arm .
           
           # 2. Безопасно добавляем нужные библиотеки
           flutter pub add flutter_map latlong2 geolocator sqflite path
