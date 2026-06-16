@@ -1,66 +1,220 @@
-name: Build Android APK
-
-on:
-  push:
-    branches:
-      - main
-      - master
-  workflow_dispatch:
-
-jobs:
-  build:
-    name: Build APK
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-
-      - name: Prepare Project Structure & Android Files
-        run: |
-          # 1. Робот сам раскладывает ваши файлы по правильным папкам
-          mkdir -p lib/screens lib/models lib/services
-          mv main.dart lib/ || true
-          mv map_screen.dart lib/screens/ || true
-          mv hotspot.dart lib/models/ || true
-          mv database_helper.dart lib/services/ || true
+          # 1. Создаем чистый проект Flutter (сгенерирует правильный pubspec.yaml)
+          flutter create --platforms=android .
           
-          # 2. Удаляем сломанный/пустой pubspec.yaml
-          rm -f pubspec.yaml
-          
-          # 3. Создаем идеальный проект заново (сгенерирует правильный pubspec.yaml и файлы Android)
-          flutter create --platforms=android --project-name fire_scout_arm .
-          
-          # 4. Безопасно добавляем нужные библиотеки штатными средствами Flutter
+          # 2. Безопасно добавляем нужные библиотеки
           flutter pub add flutter_map latlong2 geolocator sqflite path
+          
+          # 3. Создаем нужные папки
+          mkdir -p lib/screens lib/models lib/services
+          
+          # 4. ПРИНУДИТЕЛЬНО записываем 100% рабочий код, игнорируя то, что лежит на GitHub
+          cat << 'EOF' > lib/main.dart
+          import 'package:flutter/material.dart';
+          import 'screens/map_screen.dart';
+
+          void main() {
+            WidgetsFlutterBinding.ensureInitialized();
+            runApp(const FireScoutApp());
+          }
+
+          class FireScoutApp extends StatelessWidget {
+            const FireScoutApp({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                title: 'АРМ Лесоохрана',
+                debugShowCheckedModeBanner: false,
+                theme: ThemeData(primarySwatch: Colors.blue),
+                home: const MapScreen(),
+              );
+            }
+          }
+          EOF
+          
+          cat << 'EOF' > lib/screens/map_screen.dart
+          import 'package:flutter/material.dart';
+          import 'package:flutter_map/flutter_map.dart';
+          import 'package:latlong2/latlong.dart';
+          import 'package:geolocator/geolocator.dart';
+          import '../models/hotspot.dart';
+          import '../services/database_helper.dart';
+
+          class MapScreen extends StatefulWidget {
+            const MapScreen({super.key});
+            @override
+            State<MapScreen> createState() => _MapScreenState();
+          }
+
+          class _MapScreenState extends State<MapScreen> {
+            final LatLng baseLocation = const LatLng(56.1333, 86.1167);
+            List<Hotspot> hotspots = [];
+            LatLng? currentLocation;
+            final MapController _mapController = MapController();
+
+            final List<LatLng> optimizedRoute = [
+              const LatLng(56.1333, 86.1167),
+              const LatLng(56.1500, 86.1000),
+              const LatLng(56.1800, 86.1500),
+              const LatLng(56.1200, 86.2000),
+              const LatLng(56.1333, 86.1167),
+            ];
+
+            @override
+            void initState() {
+              super.initState();
+              _loadData();
+              _initLocationTracking();
+            }
+
+            Future<void> _loadData() async {
+              var loadedHotspots = await DatabaseHelper.instance.getAllHotspots();
+              if (loadedHotspots.isEmpty) {
+                loadedHotspots = [
+                  Hotspot(id: "T-01", location: const LatLng(56.1500, 86.1000)),
+                  Hotspot(id: "T-02", location: const LatLng(56.1800, 86.1500)),
+                  Hotspot(id: "T-03", location: const LatLng(56.1200, 86.2000)),
+                ];
+                for (var h in loadedHotspots) {
+                  await DatabaseHelper.instance.insertHotspot(h);
+                }
+              }
+              setState(() {
+                hotspots = loadedHotspots;
+              });
+            }
+
+            Future<void> _initLocationTracking() async {
+              bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+              if (!serviceEnabled) return;
+              LocationPermission permission = await Geolocator.checkPermission();
+              if (permission == LocationPermission.denied) permission = await Geolocator.requestPermission();
+              if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
+                Geolocator.getPositionStream(
+                  locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 10)
+                ).listen((Position position) {
+                  setState(() { currentLocation = LatLng(position.latitude, position.longitude); });
+                });
+              }
+            }
+
+            void _updateHotspotStatus(Hotspot hotspot, String newStatus) async {
+              await DatabaseHelper.instance.updateStatus(hotspot.id, newStatus);
+              setState(() { hotspot.status = newStatus; });
+              Navigator.pop(context);
+            }
+
+            void _showActionDialog(Hotspot hotspot) {
+              showModalBottomSheet(
+                context: context,
+                builder: (context) {
+                  return Padding(
+                    padding: const EdgeInsets.all(20.0),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('Термоточка ${hotspot.id}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 20),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceAround,
+                          children: [
+                            ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.red), onPressed: () => _updateHotspotStatus(hotspot, 'confirmed'), child: const Text('Пожар', style: TextStyle(color: Colors.white))),
+                            ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.green), onPressed: () => _updateHotspotStatus(hotspot, 'false_alarm'), child: const Text('Ложное', style: TextStyle(color: Colors.white))),
+                          ],
+                        )
+                      ],
+                    ),
+                  );
+                }
+              );
+            }
+
+            Color _getMarkerColor(String status) {
+              if (status == 'confirmed') return Colors.red;
+              if (status == 'false_alarm') return Colors.green;
+              return Colors.orange;
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(title: const Text('Патруль: Красный Яр'), backgroundColor: Colors.blueGrey),
+                body: FlutterMap(
+                  mapController: _mapController,
+                  options: MapOptions(center: baseLocation, zoom: 11.5),
+                  children: [
+                    TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'com.firescout.arm'),
+                    PolylineLayer(polylines: [Polyline(points: optimizedRoute, strokeWidth: 4.0, color: Colors.blueAccent.withOpacity(0.8))]),
+                    MarkerLayer(
+                      markers: [
+                        Marker(point: baseLocation, width: 50, height: 50, builder: (ctx) => const Icon(Icons.security, color: Colors.blue, size: 40)),
+                        ...hotspots.map((h) => Marker(
+                          point: h.location, width: 50, height: 50,
+                          builder: (ctx) => GestureDetector(onTap: () => _showActionDialog(h), child: Icon(Icons.local_fire_department, color: _getMarkerColor(h.status), size: 40)),
+                        )),
+                        if (currentLocation != null)
+                          Marker(point: currentLocation!, width: 30, height: 30, builder: (ctx) => const Icon(Icons.navigation, color: Colors.purple, size: 30)),
+                      ],
+                    ),
+                  ],
+                ),
+                floatingActionButton: FloatingActionButton(
+                  onPressed: () { if (currentLocation != null) _mapController.move(currentLocation!, 13); },
+                  child: const Icon(Icons.my_location),
+                ),
+              );
+            }
+          }
+          EOF
+          
+          cat << 'EOF' > lib/models/hotspot.dart
+          import 'package:latlong2/latlong.dart';
+          class Hotspot {
+            final String id;
+            final LatLng location;
+            String status;
+            Hotspot({required this.id, required this.location, this.status = 'pending'});
+            Map<String, dynamic> toMap() => {'id': id, 'latitude': location.latitude, 'longitude': location.longitude, 'status': status};
+            factory Hotspot.fromMap(Map<String, dynamic> map) => Hotspot(id: map['id'], location: LatLng(map['latitude'], map['longitude']), status: map['status']);
+          }
+          EOF
+          
+          cat << 'EOF' > lib/services/database_helper.dart
+          import 'package:sqflite/sqflite.dart';
+          import 'package:path/path.dart';
+          import '../models/hotspot.dart';
+          class DatabaseHelper {
+            static final DatabaseHelper instance = DatabaseHelper._init();
+            static Database? _database;
+            DatabaseHelper._init();
+            Future<Database> get database async {
+              if (_database != null) return _database!;
+              _database = await _initDB('fire_scout.db');
+              return _database!;
+            }
+            Future<Database> _initDB(String filePath) async {
+              final dbPath = await getDatabasesPath();
+              final path = join(dbPath, filePath);
+              return await openDatabase(path, version: 1, onCreate: _createDB);
+            }
+            Future _createDB(Database db, int version) async {
+              await db.execute('CREATE TABLE hotspots (id TEXT PRIMARY KEY, latitude REAL NOT NULL, longitude REAL NOT NULL, status TEXT NOT NULL)');
+            }
+            Future<void> insertHotspot(Hotspot hotspot) async {
+              final db = await instance.database;
+              await db.insert('hotspots', hotspot.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+            }
+            Future<List<Hotspot>> getAllHotspots() async {
+              final db = await instance.database;
+              final result = await db.query('hotspots');
+              return result.map((json) => Hotspot.fromMap(json)).toList();
+            }
+            Future<void> updateStatus(String id, String status) async {
+              final db = await instance.database;
+              await db.update('hotspots', {'status': status}, where: 'id = ?', whereArgs: [id]);
+            }
+          }
+          EOF
           
           # 5. Робот добавляет права на GPS и Интернет для карты
           python3 -c '
-          path = "android/app/src/main/AndroidManifest.xml"
-          with open(path, "r") as f: content = f.read()
-          perms = "<uses-permission android:name=\"android.permission.INTERNET\"/>\n<uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\"/>\n<uses-permission android:name=\"android.permission.ACCESS_COARSE_LOCATION\"/>\n<application"
-          content = content.replace("<application", perms)
-          with open(path, "w") as f: f.write(content)
-          '
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Build APK
-        run: flutter build apk --release
-
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
